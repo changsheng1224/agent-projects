@@ -2,9 +2,8 @@
 
 > 将一次冗长的 Agent 失败 Session，编译为安全、可重放、可审计的最小回归 Case。
 
-[![CI](https://github.com/changsheng1224/dsh/actions/workflows/ci.yml/badge.svg)](https://github.com/changsheng1224/dsh/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6)](https://www.typescriptlang.org/)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/changsheng1224/dsh/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 ## 项目背景与目标
 
@@ -41,37 +40,56 @@ flowchart LR
 | 修复验证         | 对原始版本、Minimal Case 与修复版本执行同 Oracle、同配置复跑，区分“偶然未出现”与“问题已关闭”           |
 | Case 资产化      | 输出带 Schema Version、校验和、脱敏结果及 Markdown/JSON/JUnit 报告的 Case Bundle，便于审查与共享       |
 
-## 五分钟离线体验
+## 离线演示与实际输出
 
-### 环境要求
+项目内置 `synthetic-search-loop` 与 `realistic-wrong-tool` 两类脱敏 Demo，分别验证重复 Tool 调用最小化和错误 Tool 选择。它们覆盖 Session 导入、CaseIR、Oracle、分层缩减、Fixture 回放、Bundle 往返校验和修复后负向验证，全程不访问网络、不读取 Provider 凭据，也不执行真实写操作。
 
-- Node.js `^22.19.0 || >=24.0.0`
-- pnpm `11.19.0`
-- Git `>=2.26`
-
-### 安装与验证
-
-```bash
-git clone https://github.com/changsheng1224/dsh.git
-cd dsh
-corepack enable
-pnpm install --frozen-lockfile
-pnpm build
-pnpm test:e2e
-```
-
-离线 E2E 包含两类可重复 Demo：
-
-- [`synthetic-search-loop`](https://github.com/changsheng1224/dsh/tree/main/examples/synthetic-search-loop)：重复调用同一搜索 Tool；
-- [`realistic-wrong-tool`](https://github.com/changsheng1224/dsh/tree/main/examples/realistic-wrong-tool)：选择具有外部写语义的错误 Tool。
-
-它们覆盖 Session 导入、CaseIR、Oracle、最小化、Fixture 回放、Bundle 往返校验和修复后负向验证。整个过程不访问网络、不读取 Provider 凭据，也不执行真实写操作。
-
-Windows 用户也可以直接运行：
+2026-09-05 在 Node.js `v24.16.0`、pnpm `11.19.0` 环境执行：
 
 ```powershell
 ./examples/run-f15-demo.ps1
 ```
+
+```text
+=== F15 offline baseline demos ===
+Running hermetic import -> minimize -> bundle -> replay tests...
+
+Test Files  2 passed (2)
+Tests       3 passed (3)
+Duration    2.46s
+
+=== F15 demo completed: no network, no credentials, no real writes ===
+```
+
+[查看脱敏测试与评测报告](reports/validation-summary.md)
+
+## 输入与输出示例
+
+`synthetic-search-loop` 模拟 Agent 围绕同一问题连续三次调用 `search_docs`，同时在 History 中混入与失败无关的规划文本。Failure Oracle 将“相同参数的搜索调用至少出现三次”定义为目标失败行为。
+
+```json
+{
+  "tool": "search_docs",
+  "arguments": { "query": "rollback policy", "limit": 10 },
+  "repeatedCalls": 3,
+  "irrelevantHistory": true
+}
+```
+
+经过基线验证和分层 DDMin 后，系统删除无关 History，同步保留触发失败所需的 Context、Tool Schema 与 Fixture，并生成可审查的 Case Bundle：
+
+```json
+{
+  "status": "observed-one-minimal",
+  "historyRemoved": true,
+  "inputTokenReduction": ">50%",
+  "originalBehavior": "behavioral-match",
+  "repairedBehavior": "behavioral-mismatch",
+  "externalWrites": 0
+}
+```
+
+这里的离线结果来自确定性 Demo Runner，用于验证编译、缩减和安全回放链路；真实模型验证在报告中单独标识，不与离线证据混用。
 
 ## CLI 快速上手
 
@@ -116,7 +134,7 @@ dsh-case cache clean|status
 
 未注入 Live Runner 时，`reproduce` 与 `test` 只执行 Fixture-backed Transcript Preflight，并返回专用退出码 `4`。这证明结构与安全前置检查通过，不代表模型行为已经复现。
 
-完整参数和退出码见 [`packages/cli/README.md`](https://github.com/changsheng1224/dsh/blob/main/packages/cli/README.md)。
+CLI 使用稳定退出码区分成功、参数错误、证据不足、Fixture Preflight 和内部错误，便于接入自动化回归流程。
 
 ## 接入 DSH
 
@@ -175,7 +193,7 @@ DSH 仍处于 developer preview。插件不会猜测未公开 API，也不会使
 
 只有最终验证和逐单元验证同时通过，状态才会升级为 `observed-one-minimal`。模型、参数、Oracle、Tool Policy、Fixture、DSH 版本与 Runner 身份共同参与证据身份；预算耗尽或取消只会得到 `partial-minimization`。执行错误、Fixture Miss、权限拒绝、限流和取消均不能计为 Oracle 命中。
 
-这一机制保证的是**给定实验边界下的 Observed 1-minimal**，而不是计算代价极高的全局最小，也不把经验阈值包装成统计显著性。完整语义见 [ADR-0002](https://github.com/changsheng1224/dsh/blob/main/docs/adr/0002-observed-one-minimal.md)。
+这一机制保证的是**给定实验边界下的 Observed 1-minimal**，而不是计算代价极高的全局最小，也不把经验阈值包装成统计显著性。
 
 ## 安全边界
 
@@ -198,7 +216,7 @@ DSH 仍处于 developer preview。插件不会猜测未公开 API，也不会使
 - Bundle 路径必须为根目录内的规范相对路径，并通过哈希和长度校验；
 - Workspace 隔离只是一致性机制，不被描述为安全沙箱。
 
-完整威胁边界见 [`docs/security-model.md`](https://github.com/changsheng1224/dsh/blob/main/docs/security-model.md)。
+上述约束同时适用于 Demo、回归测试和真实模型验证，证据类型会在报告中明确区分。
 
 ## Case Bundle
 
@@ -285,4 +303,4 @@ CI 在 Windows/Linux 与 Node.js `22.19.0`/`24` 矩阵上运行格式、Lint、T
 
 ## License
 
-[Apache-2.0](https://github.com/changsheng1224/dsh/blob/main/LICENSE)
+[Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0)
