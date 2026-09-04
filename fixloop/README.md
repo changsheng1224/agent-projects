@@ -5,7 +5,6 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![pytest](https://img.shields.io/badge/tests-pytest-green.svg)](https://docs.pytest.org/)
 [![Docker](https://img.shields.io/badge/verification-Docker-2496ED.svg)](https://www.docker.com/)
-[![Tag](https://img.shields.io/badge/tag-v1.0.0-5C6BC0.svg)](https://github.com/changsheng1224/FixLoop/tree/v1.0.0)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/changsheng1224/FixLoop)
 
 ## 项目背景与目标
@@ -15,40 +14,6 @@
 FixLoop 因此被设计为一套通用 Agent Harness：底层自研 Agent Runtime，统一承载模型调用、Agent Loop、工具执行、Context、Checkpoint 和 Trace；上层以代码缺陷修复作为参考实现，通过 Patcher、Critic、Verifier 与 Orchestrator 构成受控闭环，验证底层机制在真实多步任务中的可复用性。
 
 项目关注的不是让多个 Agent 简单轮流对话，而是建立清晰的执行权、工具权和裁决权边界：模型负责理解问题和提出修改，Runtime 负责安全执行，Verifier 以真实测试结果判断补丁是否成立。
-
-## 1 分钟离线验证
-
-以下命令运行内置 `case_001`，使用 Fake Runner 复用标准修复结果并执行真实验证，不需要模型 API Key：
-
-```bash
-git clone https://github.com/changsheng1224/FixLoop.git
-cd FixLoop
-pip install -e ".[dev]"
-python -m src.cli eval --case case_001 --fake --markdown --verbose
-```
-
-### 输入与输出示例
-
-**输入：**`pricing.py` 将 JSON 字符串形式的单价与整数数量直接相加，引发 `TypeError`。
-
-```python
-def line_total(unit_price, count):
-    return unit_price + count
-```
-
-**输出：**系统应用最小补丁，独立运行测试，并生成 JSON 与 Markdown 评测报告。
-
-```diff
-- return unit_price + count
-+ return int(unit_price) * count
-```
-
-```text
-[OK] case_001 type=type_error fixed=True retries=0 lines=1/1
-Report: eval_results/eval_report.json
-```
-
-![FixLoop 单 Case 离线验证结果](assets/fixloop-eval-result.svg)
 
 ## 整体工作流
 
@@ -161,9 +126,7 @@ Canonical Trace 使用统一 `run_id/trace_id` 串联模型调用、工具执行
 | 自动化验证 | 建设约 `2,183` 个 pytest 测试函数，覆盖 Agent Loop、Tool、Context、Repair 与 Sandbox |
 | 安全执行   | 正式评测与验证链路中补丁均经确定性应用与独立 Verifier 判定                           |
 
-[查看正式 60-run 评测摘要与复现方式](reports/evaluation-summary.md)
-
-## 完整运行方式
+## 快速开始
 
 ### 环境要求
 
@@ -199,12 +162,6 @@ python -m src.cli repair \
 ```bash
 python -m src.cli eval --case case_001 --fake --markdown
 ```
-
-## 版本与下载
-
-- 稳定里程碑：[v1.0.0](https://github.com/changsheng1224/FixLoop/tree/v1.0.0)
-- 下载产物：[FixLoop v1.0.0 ZIP](https://github.com/changsheng1224/FixLoop/archive/refs/tags/v1.0.0.zip)
-- 其他阶段版本：[Tags](https://github.com/changsheng1224/FixLoop/tags)
 
 ## License
 
