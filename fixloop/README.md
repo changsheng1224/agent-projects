@@ -10,6 +10,8 @@ FixLoop 将 Agent 运行内核与代码修复应用分开设计：底层统一�
 
 **技术栈：**Python / Pydantic / SQLite / Git Worktree / WSL / bubblewrap / pytest / SSE。
 
+**图示导航：**[双层架构](#运行内核与修复应用) · [修复流程](#一次修复如何推进) · [上下文组装](#上下文如何由不同来源组装) · [执行控制](#工具权限与执行恢复) · [权限边界](#执行环境与网络权限边界) · [多会话协作](#多会话候选应用时序)
+
 ## 运行内核与修复应用
 
 复杂任务需要持续管理目标、证据、工具权限和执行状态。将这些能力集中到 Runtime，使代码修复策略、模型服务与执行后端能够分别演进；普通 Agent 也可以复用相同内核，无需携带修复角色或业务配置。
@@ -99,6 +101,48 @@ Subagent 的发现需要经过任务范围、来源和工作区有效性检查�
 
 原始交互与执行记录保留，压缩只形成当前请求的上下文视图。无法完整装入必需信息时阻止调用，避免把缺少关键条件的请求继续交给模型。模型与工具用量进入运行账本，恢复时沿用已记录预算。
 
+### 上下文如何由不同来源组装
+
+```mermaid
+flowchart LR
+  subgraph AUTHORITY["权威任务状态"]
+    T["当前目标 · 硬约束 · 决策"]
+  end
+
+  subgraph EVIDENCE["执行证据"]
+    E["源码观察 · 修改记录 · 验证反馈"]
+    E --> F["核对来源与当前内容版本"]
+  end
+
+  subgraph HISTORY["原始交互记录"]
+    H[("追加保存的完整历史")]
+    H --> P["完整交互选择与分级压缩"]
+  end
+
+  T --> C["当前请求上下文"]
+  F --> C
+  P --> C
+  C --> G{"必需信息完整且预算可用？"}
+  G -->|是| M(["调用模型"])
+  G -->|否| X["阻止调用并报告原因"]
+
+  classDef state fill:#312E81,stroke:#4338CA,color:#FFFFFF
+  classDef evidence fill:#F0FDFA,stroke:#14B8A6,color:#134E4A
+  classDef history fill:#F8FAFC,stroke:#94A3B8,color:#334155
+  classDef context fill:#EEF2FF,stroke:#818CF8,color:#312E81
+  classDef gate fill:#FFF7ED,stroke:#F97316,color:#7C2D12
+  class T state
+  class E,F evidence
+  class H,P history
+  class C,M context
+  class G,X gate
+  style AUTHORITY fill:#F5F3FF,stroke:#A5B4FC,color:#312E81
+  style EVIDENCE fill:#F0FDFA,stroke:#5EEAD4,color:#134E4A
+  style HISTORY fill:#F8FAFC,stroke:#CBD5E1,color:#334155
+```
+
+三类来源按各自职责进入同一次请求：任务状态保留当前要求，执行证据说明发生了什么，历史投影提供交互背景。摘要不会反向覆盖目标、约束或已确认的执行事实。
+
 ## 工具权限与执行恢复
 
 所有动作经过统一 Tool Runtime，完成参数、路径、权限和预算检查，再交给对应执行后端。修改工具检查源文件状态并保留执行依据，多文件提交失败时尝试恢复已完成的修改；结果未确认时停止后续写入。
@@ -115,15 +159,90 @@ Subagent 的发现需要经过任务范围、来源和工作区有效性检查�
 
 运行所有权和资源终态分别校验，避免两个恢复请求同时接管同一任务，也避免将一次超时当成进程已退出。宿主执行、工作区隔离与命令沙箱各有边界，不能相互替代。
 
+### 授权、恢复与取消如何衔接
+
+```mermaid
+stateDiagram-v2
+  direction TB
+  state "执行中" as Running
+  state "等待授权" as Waiting
+  state "恢复前核对" as Checking
+  state "取消与清理中" as Cancelling
+  state "待恢复：结果未确认" as Recovery
+  state "已验证修复" as Fixed
+  state "本次运行结束" as Stopped
+
+  [*] --> Running: 入口检查通过
+  Running --> Waiting: 需要额外授权
+  Waiting --> Checking: 审批后请求续跑
+  Waiting --> Stopped: 拒绝授权且清理已确认
+  Running --> Checking: 中断后从检查点请求恢复
+  Checking --> Running: 所有权、工作区与资源核验通过
+  Checking --> Recovery: 写入或资源状态仍不确定
+  Checking --> Stopped: 原运行已终结或不允许续跑
+  Running --> Cancelling: 取消或超时
+  Cancelling --> Stopped: 终止、清理与必要回滚已确认
+  Cancelling --> Recovery: 进程或副作用未确认
+  Recovery --> Checking: 显式核查并请求恢复
+  Running --> Fixed: 满足真实验证要求且资源收尾已确认
+  Running --> Stopped: 失败、预算止损或未验证结束且资源已确认
+  Fixed --> [*]
+  Stopped --> [*]
+```
+
+图中聚焦执行控制关系。等待授权、执行已结束和资源仍待确认分别保留语义；Resume 必须重新核对恢复条件，Cancel 也需要确认实际清理结果。
+
 ### 受控的外部资料获取
 
 外部资料获取默认关闭。Patcher 可在宿主明确启用并授权后，通过 Search / Fetch 补充公开文档、版本说明与 Issue。外部访问受独立权限、请求配额、成本和截止时间约束，结果保留来源与不可信标记。
 
 外部资料不能授权本地操作，也不能作为源码已读或测试通过的证据。命令沙箱保持无网络，资料获取经固定宿主适配执行；仓库内容不能自行启用联网能力。
 
+### 执行环境与网络权限边界
+
+```mermaid
+flowchart TB
+  MODEL["模型提出的工具请求"] --> GATE
+
+  subgraph HOST["可信宿主 · 治理与运行控制"]
+    GATE["Tool Runtime<br/>参数 · 路径 · 权限 · 审批 · 预算"]
+    RECORD[("运行身份 · 权限 · 执行记录")]
+    WEB["固定 Search / Fetch 适配"]
+    GATE --> RECORD
+    GATE -.->|显式启用与独立授权| WEB
+  end
+
+  subgraph EXEC["任务执行环境 · WSL / bubblewrap"]
+    FILE["当前任务文件访问与修改"]
+    PROC["受管命令与测试进程"]
+    BOUNDARY["挂载 · 进程 · 网络边界<br/>命令环境无网络"]
+  end
+
+  GATE --> FILE
+  GATE --> PROC
+  PROC -.->|终态与清理结果| RECORD
+  WEB --> PUBLIC(["公开资料服务"])
+  PUBLIC --> OBS["带来源与不可信标记的资料"]
+
+  classDef request fill:#F8FAFC,stroke:#94A3B8,color:#334155
+  classDef control fill:#FFFFFF,stroke:#475569,stroke-width:2px,color:#0F172A
+  classDef execution fill:#EFF6FF,stroke:#60A5FA,color:#1E3A8A
+  classDef external fill:#FFF7ED,stroke:#FB923C,color:#7C2D12
+  class MODEL,RECORD request
+  class GATE control
+  class FILE,PROC,BOUNDARY execution
+  class WEB,PUBLIC,OBS external
+  style HOST fill:#F8FAFC,stroke:#64748B,color:#0F172A
+  style EXEC fill:#EFF6FF,stroke:#3B82F6,stroke-width:2px,stroke-dasharray:6 4,color:#1E3A8A
+```
+
+上图展示 WSL / bubblewrap 运行模式：受治理的文件与命令操作进入绑定的任务执行环境，公开资料获取使用单独授权的宿主路径。启用资料服务不会赋予命令进程联网权限，外部内容也不会扩大本地执行权限。
+
 ## Workbench：多会话中的候选与代码状态
 
 工作台提供普通聊天、项目只读问答和代码修复入口，以流式事件展示运行进度。项目可以关联多个会话，各次运行使用独立执行副本，候选补丁经差异预览和明确确认后才应用到原项目。
+
+### 多会话候选应用时序
 
 ```mermaid
 sequenceDiagram
