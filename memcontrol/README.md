@@ -1,174 +1,195 @@
 # MemControl
 
-> 面向 Coding Agent 的本地优先、跨客户端、可审计长期记忆控制面。
+> Coding Agent 长期记忆治理与上下文基础设施：让跨会话、跨客户端的记忆可复用、可审阅、可纠错，并能验证删除结果。
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6)](https://www.typescriptlang.org/)
-[![SQLite](https://img.shields.io/badge/storage-SQLite-003B57)](https://www.sqlite.org/)
-[![MCP](https://img.shields.io/badge/integration-MCP-6B57FF)](https://modelcontextprotocol.io/)
-[![Obsidian](https://img.shields.io/badge/control%20plane-Obsidian-7C3AED)](https://obsidian.md/)
+MemControl 是面向 Codex、Cursor 等 Coding Agent 的本地优先长期记忆控制面。项目通过 MCP 与 Hook 接入任务流程，以 Memory Daemon 统一管理记忆写入、召回、反馈和生命周期，通过 Obsidian 提供可视审阅入口，让多个客户端复用同一份由开发者管理的长期记忆。
 
-## 项目背景与目标
+**个人职责：**负责整体架构、核心开发与客户端接入，构建从记忆候选、任务感知召回到效果评估、版本演化与受管删除的完整治理链路。
 
-Coding Agent 的内建 Memory 通常服务于单一客户端的使用连续性，但当用户同时使用 Codex、Cursor 等工具时，长期偏好、项目决策、约束和经验容易被分散在不同产品中。更重要的是，“能够记住”并不等于“能够可信地管理”：自动写入可能保存猜测或敏感信息，跨项目召回可能造成 Scope 泄漏，冲突记忆可能被静默覆盖，删除操作也可能只移除界面记录而留下正文或索引残留。
+**技术栈：**TypeScript / Node.js / SQLite / MCP / Obsidian Plugin / Vitest / npm Workspaces。
 
-MemControl 的目标不是让 Agent 无限制地记住更多，而是让多个 Agent 使用同一份由用户拥有、能够检查、审批、纠错、迁移并验证删除的长期记忆。项目将记忆从“聊天产品的附属功能”提升为独立治理系统，覆盖产生、候选、审批、存储、召回、反馈、更新、晋升、衰减、失效和删除的完整生命周期。
+## 项目亮点
 
-Obsidian 在系统中承担面向用户的薄控制面：用户可以流畅浏览已生效记忆、处理候选、查看冲突和版本关系、检查召回记录并完成删除确认；所有写操作仍由 Memory Daemon 统一执行，界面不会直接修改底层数据库。
+- **跨客户端 Memory Infra：**将长期偏好、项目决策和已验证经验从客户端中独立出来，通过统一协议与治理规则供多个 Coding Agent 复用。
+- **任务感知的上下文供给：**结合项目范围、当前任务与环境条件判断记忆适用性，以引用卡片和按需详情控制上下文预算，避免无差别注入历史信息。
+- **可追溯的记忆效果评估：**区分召回、交付、使用声明、实际采纳与独立验收，将反馈绑定到具体任务和记忆版本，减少错误归责与重复计分。
+- **一致的生命周期管理：**以单写者、请求幂等和版本校验处理多客户端操作，统一审批、冲突、纠错与删除，并提供可视管理和审计依据。
 
-## 与内建 Memory 和 RAG 的区别
+## 背景与目标
 
-| 方案                  | 主要目标                             | MemControl 的差异                                                          |
-| --------------------- | ------------------------------------ | -------------------------------------------------------------------------- |
-| Codex/Cursor 内建记忆 | 优化单个产品内的个性化与会话连续性   | 提供跨客户端统一记忆、用户所有权、完整审计以及一致的写入和删除契约         |
-| 普通知识库 RAG        | 从文档集合中检索与当前问题相关的内容 | 关注记忆是否应该写入、属于哪个 Scope、是否冲突、何时失效以及能否被真正删除 |
-| 简单 KV/向量记忆      | 保存内容并按 Key 或相似度取回        | 在检索之前增加候选审批、来源追踪、风险分级、版本治理和生命周期状态机       |
+Coding Agent 的长期偏好、项目约束和历史经验容易分散在不同会话与客户端中。记忆一旦过时、冲突或不适用于当前任务，就可能干扰后续决策；自动保存未经确认的结论，也会让错误和敏感信息持续积累。
 
-检索只是 MemControl 的一个环节。项目的第一价值是治理正确性，其次才是召回质量。
+项目围绕三个问题展开设计：**什么值得记住、何时适合使用、如何持续纠错**。在检索之外增加来源、作用域、审批和版本治理，使记忆既能进入 Agent 的任务上下文，也能由开发者检查、修正和删除。
 
-## 记忆生命周期
+### 记忆生命周期与治理流程
+
+```mermaid
+flowchart TB
+  S(["用户偏好 · 项目决策 · 任务经验"]) --> C["形成带来源的记忆候选"]
+  C --> G{"是否满足写入条件？"}
+  G -->|不满足| D["拒绝写入或返回安全表达建议"]
+  G -->|需要确认| R["开发者审阅与冲突处理"]
+  G -->|低风险策略通过| A["生效记忆"]
+  R -->|审批通过| A
+  R -->|拒绝| D
+  A --> U["当前任务适用性检查与受控召回"]
+  U --> F["绑定任务与版本的效果反馈"]
+  F -->|证据支持| E["纠错 · 更新 · 失效候选"]
+  E --> R
+  A -.->|过期或被替代| X["退出默认召回"]
+  A -.->|用户确认删除| P[/"清理受管数据并验证残留"/]
+
+  classDef source fill:#F8FAFC,stroke:#64748B,color:#0F172A
+  classDef process fill:#EFF6FF,stroke:#3B82F6,color:#1E3A8A
+  classDef review fill:#FFF7ED,stroke:#F59E0B,color:#7C2D12
+  classDef active fill:#ECFDF5,stroke:#10B981,color:#064E3B
+  class S source
+  class C,U,F,E process
+  class G,D,R review
+  class A,P active
+  class X source
+```
+
+写入资格、审批策略与实际生效分别管理。自动化负责组织候选与提供证据，纠错、失效和删除沿用各自的权限与确认流程。
+
+## 核心能力与设计思路
+
+### 1. 记忆写入与语义治理：在持久化前控制质量
+
+统一接收用户请求、Agent 提议和任务经验候选，检查来源、作用域、敏感风险与审批要求。对于受支持的敏感类型，在写入前拒绝保存或提供待确认的安全表达，避免将不宜长期保留的信息直接进入存储。
+
+结合逻辑身份、结构化事实与已确认的作用域内映射，区分重复、补充和冲突，保留判断依据与版本关系。语义建议和实际变更分别处理；证据不足或条件未知时保持待核验，避免把相似内容直接合并，或用后写入的结论覆盖旧记忆。
+
+### 2. 任务感知与按需召回：让记忆在合适的条件下进入上下文
+
+先依据作用域、权限、有效状态和当前任务条件筛选适用记忆，再进行关键词与可选语义检索。项目目录、工具链和版本条件参与适用性判断，已知不适用内容默认排除，未知条件保留明确标记。
+
+通过 MCP 与 Hook 提供记忆引用卡片，按需读取详情；已批准且适用的当前约束可以直接提供正文。上下文组织受预算约束，并配套异步调用、超时取消、缓存与关键词检索降级，在记忆复用、上下文开销与服务稳定性之间取得平衡。
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Coding Agent
+  participant B as MCP / Hook
+  participant D as Memory Daemon
+  participant S as 本地记忆存储
+
+  A->>B: 请求当前任务相关记忆
+  B->>D: 提交已绑定的项目范围与任务条件
+  D->>S: 查询授权范围内的有效记忆
+  S-->>D: 当前版本、来源与适用条件
+  D->>D: 检查适用性，组织预算内上下文
+  D-->>B: 引用卡片与必要的当前约束
+  B-->>A: 提供参考上下文
+
+  opt 需要进一步了解某条记忆
+    A->>B: 按引用请求详情
+    B->>D: 读取目标记忆
+    D->>S: 再次检查当前版本与有效状态
+    S-->>D: 返回当前可用详情
+    D-->>B: 正文、来源与适用性说明
+    B-->>A: 返回按需详情
+  end
+
+  Note over A,D: 召回与交付单独记录，不直接认定为实际采纳
+```
+
+引用与详情使用一致的范围和有效性规则，防止先召回、后读取期间的纠错、失效或删除被忽略。记忆始终作为参考信息提供，不能覆盖系统指令。
+
+### 3. 记忆效果评估与反馈：用证据区分“提供过”与“起作用”
+
+将记忆交付、行为采纳与任务验收关联到同一任务、记忆版本和验收条件，区分使用声明、可观察行为与独立验收结果。对于受支持的结构化证据，通过签名校验和版本绑定检查其来源与关联；证据不足、来源错配或存在其他解释时保留不确定结论。
+
+评估支持复核、撤销与重新核验，并保留历史意见和当前证据状态。有效反证可以形成纠错或失效候选，由既有治理流程处理。反馈不直接改写正文或提升可信度；效果加权排序默认关闭，将证据评估与自动应用分开管理。
+
+### 4. 生命周期与可视管理：统一多客户端状态与删除语义
+
+以 Memory Daemon 作为唯一写入权威，统一处理审批、纠错、版本替代、过期与删除。通过单写者、请求幂等、版本校验与事务提交协调多个客户端操作，避免重试产生重复记录，或过期请求覆盖当前状态。
+
+Obsidian 提供记忆浏览、候选审阅、冲突处理和审计入口，CLI 使用相同治理契约。删除前展示影响范围并确认，随后清理受管正文、索引、投影和关联数据，检查残留；恢复入口核对删除标记，防止受管恢复重新引入已删除内容。
+
+## 系统架构与取舍
+
+系统将 Agent 接入、用户管理、治理规则和本地存储分开组织。所有日常读写通过 Daemon，客户端不直接访问 SQLite；Obsidian 中的 Markdown 是阅读投影，实际状态由 Daemon 管理。
 
 ```mermaid
 flowchart LR
-  SOURCE["用户 / Agent / Task"] --> PROPOSAL["记忆候选"]
-  PROPOSAL --> GATE["校验 · 风险 · 去重 · 冲突"]
-  GATE --> APPROVAL["策略审批 / 人工确认"]
-  APPROVAL --> ACTIVE["Active Memory"]
-  ACTIVE --> RECALL["受控召回与注入"]
-  RECALL --> FEEDBACK["使用与结果反馈"]
-  FEEDBACK --> EVOLVE["纠错 · 更新 · 晋升"]
-  EVOLVE --> ACTIVE
-  ACTIVE --> RETIRE["Stale · Expired · Superseded"]
-  ACTIVE --> DELETE["Preview · Confirm · Purge"]
+  subgraph AGENTS["Agent 接入"]
+    direction TB
+    CODEX["Codex"]
+    CURSOR["Cursor"]
+  end
+
+  BRIDGE["MCP / Hook"]
+  CODEX --> BRIDGE
+  CURSOR --> BRIDGE
+
+  subgraph CONTROL["用户控制面"]
+    direction TB
+    OBS["Obsidian"]
+    CLI["CLI"]
+  end
+
+  subgraph DAEMON["Memory Daemon · 唯一写入权威"]
+    direction TB
+    RPC["统一请求与权限边界"]
+    APP["写入 · 召回 · 效果评估 · 生命周期"]
+    POLICY["作用域 · 审批 · 版本 · 幂等"]
+    RPC --> APP
+    APP --> POLICY
+  end
+
+  subgraph DATA["本地数据与派生视图"]
+    direction TB
+    DB[("SQLite<br/>事件 · 加密正文 · 当前状态")]
+    INDEX["可重建检索索引"]
+    VIEW["Markdown 阅读投影"]
+    DB --> INDEX
+    DB --> VIEW
+  end
+
+  BRIDGE --> RPC
+  OBS --> RPC
+  CLI --> RPC
+  APP --> DB
+  VIEW -.->|阅读视图| OBS
+
+  classDef module fill:#FFFFFF,stroke:#94A3B8,color:#334155
+  classDef authority fill:#FFFFFF,stroke:#8B5CF6,stroke-width:2px,color:#4C1D95
+  classDef storage fill:#FFFFFF,stroke:#64748B,color:#334155
+  class CODEX,CURSOR,BRIDGE,OBS,CLI,INDEX,VIEW module
+  class RPC,APP,POLICY authority
+  class DB storage
+  style AGENTS fill:#F8FAFC,stroke:#CBD5E1,color:#334155
+  style CONTROL fill:#F8FAFC,stroke:#CBD5E1,color:#334155
+  style DAEMON fill:#F5F3FF,stroke:#A78BFA,stroke-width:2px,color:#4C1D95
+  style DATA fill:#F8FAFC,stroke:#94A3B8,stroke-dasharray:5 5,color:#334155
 ```
 
-生命周期由四个闭环组成：
+| 设计取舍                              | 工程价值                                                         |
+| ------------------------------------- | ---------------------------------------------------------------- |
+| 多客户端共享 Daemon，保留唯一写入权威 | 将一致性、权限和治理逻辑集中管理，减少客户端之间的状态分歧       |
+| 写入审批、召回资格与效果反馈分别判断  | 防止“已保存”被误认为“适合当前任务”，或“被召回”被误认为“内容正确” |
+| 事件、正文与派生视图分层管理          | 保留变更依据，支持索引和视图重建，并明确受管删除的清理范围       |
+| 异步模型能力与本地基础检索解耦        | 模型超时或不可用时保留关键词检索；迟到结果需重新检查当前记忆状态 |
 
-- **写入闭环**：产生 → 候选 → 校验 → 审批 → 激活；
-- **使用闭环**：召回 → Context 注入 → 使用追踪 → 结果关联；
-- **演化闭环**：冲突 → 纠错/更新 → Supersede → 衰减/失效 → 晋升；
-- **治理闭环**：Scope → 权限 → 审计 → 删除验证 → 故障恢复。
+## 验证结果与适用范围
 
-## 核心能力
+以下为仓库已有的验收记录，分别说明代码回归、确定性任务和真实客户端验证的范围。
 
-| 能力                 | 作用                                                                                                      |
-| -------------------- | --------------------------------------------------------------------------------------------------------- |
-| 记忆产生与候选治理   | 接收用户显式记住、Agent 提议、Task Finalize 与受控导入；长期记忆在激活前必须经过策略判断                  |
-| Scope 与权限隔离     | 支持 Global、Workspace、Project 等 Scope，使用确定性匹配和角色权限防止跨项目、跨客户端越权                |
-| 去重与冲突处理       | 基于内容 Hash 和逻辑身份识别重复与冲突，支持 Reject、Keep Both、Correct 和 Supersede，不采用静默覆盖      |
-| 可信存储与版本演化   | 采用 Event、Payload、Projection、FTS/Embedding 分层存储，正文独立加密，所有变更保留 Revision 与 Lineage   |
-| 可解释召回与注入     | 经 Scope、状态和时间硬过滤后融合 FTS/Embedding，并按 Salience、来源质量和 Token Budget 输出召回解释       |
-| 使用反馈与记忆晋升   | 区分 Recalled、Used、OutcomeLinked 与 Corrected，只有具备证据的 Episodic Memory 才能晋升为 Procedural     |
-| 衰减、失效与过期     | 按记忆类型执行 Salience 衰减；权威来源变化标记 Stale，超过 ValidUntil 转为 Expired，默认不再召回          |
-| 可验证删除与恢复治理 | 删除采用 Preview、Revision 和 Confirmation Token，清理正文、索引、投影及数据密钥，并通过 Tombstone 防复活 |
+| 验证内容       | 已有结果                                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------------------- |
+| 工程回归       | 最近一次完整验收记录覆盖 **11 个包、536 项测试**及 **36 项脚本测试**，构建与类型检查通过                       |
+| 任务适用性     | 完成 **24 个确定性任务配置、96 个执行回执**的自动评测，覆盖适用性判断、按需上下文与反馈策略对照                |
+| 真实客户端接入 | Codex MCP、启动 Hook 及独立 Cursor 只读召回已有合成场景验证记录；原 Codex 对照实验覆盖 **9 种条件、18 次运行** |
+| 效果与治理     | 隔离验证覆盖交付、采纳、验收、复核及删除；保留正向、负向与不确定结果，检查作用域、版本和证据错配               |
 
-## 系统架构
+确定性任务和合成客户端实验不代表复杂编码任务中的净收益。评测保留了效果加权的损害反例，因此排序默认关闭；Cursor 写入、Obsidian 原生管理交互及真实编码收益尚未完成相应验收。
 
-```mermaid
-flowchart LR
-  CODEX["Codex Skill"] --> BRIDGE["MCP Bridge / Local Transport"]
-  CURSOR["Cursor Adapter"] --> BRIDGE
-  OBSIDIAN["Obsidian Control Plane"] --> BRIDGE
-  CLI["CLI"] --> BRIDGE
-  BRIDGE --> DAEMON["Memory Daemon · Sole Writer"]
-  DAEMON --> APP["Application Services"]
-  APP --> CORE["Core Domain + Policy"]
-  APP --> STORE["SQLite Event / Payload / Projection"]
-  STORE --> VIEW["FTS / Embedding / Markdown Projection"]
-  VIEW --> OBSIDIAN
-```
+项目面向本地单用户、多客户端场景。删除保证覆盖 MemControl 受管数据，不覆盖已交付到历史上下文的内容、操作系统快照或外部备份副本。
 
-| 模块             | 定位                                                                      |
-| ---------------- | ------------------------------------------------------------------------- |
-| `core`           | 定义 Memory Envelope、Scope、角色、生命周期状态机、领域事件与诊断契约     |
-| `application`    | 编排候选、审批、召回、冲突、反馈、晋升、删除、Doctor 和 Bundle 等治理用例 |
-| `storage-sqlite` | 提供 Event/Payload/Projection、FTS、迁移、加密、并发控制和受管删除        |
-| `daemon-node`    | 本地唯一写入权威，负责单写者锁、鉴权、本地传输和故障恢复                  |
-| Client Adapters  | 通过 Codex Skill、Cursor、MCP、CLI 和 Obsidian 接入同一治理契约           |
+## 项目价值
 
-架构的核心约束是所有客户端只能提出请求，不能直接读写 SQLite。Memory Daemon 串行提交事件与 Projection，使用 Request Idempotency、Expected Revision 和事务保证并发一致性；MCP Bridge 保持无状态，客户端异常不会产生旁路写入。
-
-## 写入与冲突治理
-
-记忆写入不是简单的 `save(text)`，而是一条固定治理流水线：
-
-```text
-Schema Validation
-  → Secret / PII Scan
-  → Scope & Permission Check
-  → Provenance & Evidence Check
-  → Duplicate Detection
-  → Conflict Detection
-  → Risk Classification
-  → Approval Policy
-  → Transactional Activation
-```
-
-稳定偏好、长期目标、已确认决策、长期约束和已验证经验适合进入长期记忆；临时报错、普通工具结果、未经验证的猜测、完整聊天轨迹、密钥和当前任务 Working State 会被拒绝或保持为未激活候选。
-
-对于可变语义，系统使用 `scope + type + subject + key` 建立逻辑身份。新旧结论冲突时进入 Conflict Workbench，由用户查看 Diff、来源与版本 Lineage 后选择保留、修正、拒绝或 Supersede，避免 Last-write-wins 掩盖真实冲突。
-
-## 召回、反馈与晋升
-
-召回先执行 Scope、状态、有效期等硬过滤，再进行 FTS 与可选 Embedding 检索，融合相关性、Salience 和来源质量，并在 Token Budget 内构建 Context。返回结果包含命中的 Scope、逻辑 Key、有效版本、来源与选择原因；记忆内容被包装为 Reference-only / Untrusted Context，不能覆盖系统指令。
-
-系统区分“被召回”和“被实际使用”。单纯召回次数或一次任务成功不会自动提升 Confidence；只有显式确认、权威验证、独立证据、纠错或反例才能影响置信度。经过验证的 Episodic Memory 可以提出 Procedural 候选，但晋升与导出为 Skill、Rule 或 AGENTS.md 均需要独立审批。
-
-## 用户可见的记忆管理
-
-Obsidian 插件提供面向用户的记忆库界面，而不是要求用户直接维护 Markdown 或数据库：
-
-- 浏览与筛选当前有效记忆，查看 Scope、类型、来源和版本；
-- 在 Candidate Inbox 中审批、拒绝或批量清理候选；
-- 通过 Conflict Workbench 对比差异、查看 Lineage 并填写处理原因；
-- 查看单条记忆的审计时间线和近期 Recall/Used 记录；
-- 发起纠错、更新、Supersede、晋升和重新校验；
-- 通过删除 Preview 查看影响面，再以确认令牌提交删除并清除投影。
-
-Markdown Projection 只负责提供舒适、可搜索的阅读视图，Daemon 才是状态权威。离线时允许浏览只读缓存和保存本地草稿，但审批、修改和删除会明确拒绝；重新连接后必须重新校验。
-
-## 存储、删除与审计
-
-MemControl 将事件元数据与记忆正文分离：Event Store 保留生命周期事件和不可逆内容 Hash；Payload Store 保存正文、证据和 Diff，并使用每条记忆独立的数据密钥；Projection 与 FTS/Embedding 是可重建派生数据。
-
-删除采用两阶段协议。Preview 返回 Payload、索引、投影、缓存和密钥等影响面，并签发绑定 Memory ID 与 Revision 的 Confirmation Token；Commit 在同一事务内清理受管正文、FTS、Projection 和数据密钥，随后执行残留检查。Event Store 仅保留不含正文的 Tombstone 元数据，备份恢复时必须重放 Tombstone，防止已删除记忆重新出现。
-
-## 项目指标
-
-| 项目结果       | 指标表现                                                              |
-| -------------- | --------------------------------------------------------------------- |
-| 写入质量       | Write Precision `100%`，Write Recall `100%`                           |
-| 冲突治理       | Conflict Accuracy `100%`，人工纠错与覆盖链路完整生效                  |
-| 作用域与来源   | Scope Leakage `0`，Provenance Coverage `100%`                         |
-| 敏感信息治理   | Secret Refusal Rate `100%`，Plaintext Secret Persistence `0`          |
-| 生命周期正确性 | Illegal Transition Success `0`，全生命周期连续流程覆盖 `22` 个步骤    |
-| 删除完整性     | Managed Deletion Residual `0`，删除后正文不可召回且投影同步清除       |
-| 使用验证       | 覆盖 `15` 个 Dogfood Case 与 `12` 个 Narrative Case，关键流程全部通过 |
-
-## 快速开始
-
-### 环境要求
-
-- Node.js `22.5+`
-- npm Workspaces
-- 可选：Obsidian，用于图形化记忆管理
-
-### 安装与验证
-
-```bash
-git clone https://github.com/changsheng1224/MemControl.git
-cd MemControl
-npm install
-npm run typecheck
-npm run build
-npm run oracle
-npm run demo
-```
-
-常用入口：
-
-```bash
-npm run contrast       # 对比朴素 KV / RAG 与治理型 Memory
-npm run narrative      # 运行脱敏个人使用场景
-npm run vault-loop     # 验证真实 Vault 浏览、治理与删除闭环
-npm run scale          # 运行 CI-safe 规模 Smoke
-```
+- **让经验跨会话复用：**在多个 Coding Agent 之间共享经过治理的偏好、决策与经验，减少重复提供背景。
+- **让上下文更贴近任务：**结合当前条件选择适用记忆，以引用和按需详情控制信息供给。
+- **让记忆持续可管理：**将效果反馈、纠错、失效与删除纳入统一流程，减少错误记忆长期积累。
