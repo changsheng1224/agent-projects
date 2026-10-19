@@ -1,168 +1,168 @@
 # FixLoop
 
-> 通用 Agent Harness 与代码修复系统：让 Agent 的执行过程可控、可恢复、可验证、可观测。
+> 通用 Agent Runtime 与面向代码修复的 Coding Agent。
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![pytest](https://img.shields.io/badge/tests-pytest-green.svg)](https://docs.pytest.org/)
-[![Docker](https://img.shields.io/badge/verification-Docker-2496ED.svg)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/changsheng1224/FixLoop)
+**从代码探索到真实验证，让长任务的执行、状态与交付有据可查。**
 
-## 项目背景与目标
+FixLoop 将 Agent 运行内核与代码修复应用分开设计：底层统一管理模型调用、工具执行、上下文、预算和恢复；上层组织问题分析、Subagent 探索、受控修改与真实测试，并通过 Workbench 管理多个项目、工作区和会话。
 
-复杂 Agent 任务的难点不只是让模型生成一次正确答案，而是如何在多轮推理和工具调用中持续控制状态、成本与风险。随着任务变长，系统容易出现上下文膨胀、重复调用、越权写入、执行空转、任务中断以及“模型认为完成但结果未经验证”等问题；如果运行时能力与具体业务流程耦合，类似机制也很难在其他 Agent 场景中复用。
+**个人职责：**独立负责整体架构设计与核心研发，自研通用 Agent Runtime，构建代码修复 Agent 与 Workbench 工作台。
 
-FixLoop 因此被设计为一套通用 Agent Harness：底层自研 Agent Runtime，统一承载模型调用、Agent Loop、工具执行、Context、Checkpoint 和 Trace；上层以代码缺陷修复作为参考实现，通过 Patcher、Critic、Verifier 与 Orchestrator 构成受控闭环，验证底层机制在真实多步任务中的可复用性。
+**技术栈：**Python / Pydantic / SQLite / Git Worktree / WSL / bubblewrap / pytest / SSE。
 
-项目关注的不是让多个 Agent 简单轮流对话，而是建立清晰的执行权、工具权和裁决权边界：模型负责理解问题和提出修改，Runtime 负责安全执行，Verifier 以真实测试结果判断补丁是否成立。
+## 运行内核与修复应用
 
-## 整体工作流
-
-```mermaid
-flowchart LR
-  ISSUE["Issue / Repository"] --> ORCH["Orchestrator"]
-  ORCH --> PATCHER["Patcher Tool Loop"]
-  PATCHER --> CRITIC["Critic Check"]
-  CRITIC --> APPLY["Runtime Applies Patch"]
-  APPLY --> VERIFY["Independent Verifier"]
-  VERIFY -->|passed| DONE["Fixed + Evidence"]
-  VERIFY -->|failed| FEEDBACK["Structured Feedback + Rollback"]
-  FEEDBACK --> PATCHER
-```
-
-Patcher 在受限工具集合内探索代码并提出补丁；Critic 在提交前执行轻量检查；Runtime 确定性应用修改；Verifier 在独立环境运行测试或静态检查。失败结果被转换为结构化反馈后回到 Patcher，直至修复成功、预算耗尽、超时、取消或触发无进展止损。
-
-## 核心能力
-
-| 能力                  | 作用                                                                                                    |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| 自研 Agent Runtime    | 不依赖 LangChain/LangGraph，实现模型调用、ReAct Loop、Function Calling、流式输出和状态管理              |
-| 受控修复编排          | 以 Patcher 主循环、Critic 检查、独立 Verifier 和 Orchestrator 管理职责边界及状态收敛                    |
-| Tool Runtime          | 统一 Tool Schema、Registry、Gateway 与 Executor，执行参数、路径、权限、配额、审批和快照治理             |
-| Context 与长任务治理  | 按上下文类型分配预算，通过 L0–L5 分级压缩保留任务要求、安全约束、关键代码证据和验证反馈                 |
-| 验证与回滚闭环        | 模型只提出修改，由 Runtime 应用补丁；通过 pytest 或 Docker 验证，失败后回滚并生成下一轮结构化反馈       |
-| Checkpoint 与执行控制 | 支持步数/时间预算、No-progress、Cancellation、Deadline 与 Checkpoint/Resume，控制空转并安全恢复任务     |
-| 评测与可观测          | 以 Canonical Trace 贯穿模型、Context、Tool、Patch 与 Verification，配合 Prometheus、Langfuse 和回归门禁 |
-| Provider 韧性与降级   | 提供超时、重试、Circuit Breaker、限流及检索/模型路径降级，避免外部依赖异常拖垮完整任务                  |
-
-## 双层架构
+复杂任务需要持续管理目标、证据、工具权限和执行状态。将这些能力集中到 Runtime，使代码修复策略、模型服务与执行后端能够分别演进；普通 Agent 也可以复用相同内核，无需携带修复角色或业务配置。
 
 ```mermaid
 flowchart TB
-  subgraph L2["Layer 2 · Code Repair System"]
-    ORCH2["Orchestrator"] --> P["Patcher"]
-    P --> C["Critic"]
-    C --> V["Verifier"]
-    V --> STATE["Repair State / Feedback"]
+  ENTRY["CLI · Workbench · 评测入口"]
+
+  subgraph L2["Layer 2 · 代码修复 Coding Agent"]
+    direction LR
+    SERVICE["修复服务与阶段编排"]
+    MAIN["主 Agent<br/>定位 · 分析 · 修改"]
+    SUB["只读 Subagent<br/>独立上下文探索"]
+    VERIFY["独立真实验证"]
+    SERVICE --> MAIN
+    MAIN <--> SUB
+    MAIN --> VERIFY
   end
 
-  subgraph L1["Layer 1 · General Agent Runtime"]
-    LOOP["Agent Loop"]
-    CONTEXT["Context Manager"]
-    TOOLS["Tool Runtime"]
-    PROVIDER["Model Provider"]
-    CONTROL["Checkpoint / Budget / Trace"]
+  subgraph L1["Layer 1 · 通用 Agent Runtime"]
+    direction LR
+    LOOP["模型调用与 Agent Loop"]
+    CONTEXT["上下文 · 任务状态 · 证据"]
+    TOOLS["工具治理与执行适配"]
+    CONTROL["预算 · 恢复 · 取消 · Trace"]
   end
 
-  ORCH2 --> LOOP
-  LOOP --> CONTEXT
-  LOOP --> TOOLS
-  LOOP --> PROVIDER
-  LOOP --> CONTROL
+  ENTRY --> SERVICE
+  L2 --> L1
+
+  classDef entry fill:#F8FAFC,stroke:#64748B,color:#0F172A
+  classDef application fill:#FFF7ED,stroke:#FB923C,color:#7C2D12
+  classDef kernel fill:#EEF2FF,stroke:#818CF8,color:#312E81
+  class ENTRY entry
+  class SERVICE,MAIN,SUB,VERIFY application
+  class LOOP,CONTEXT,TOOLS,CONTROL kernel
+  style L2 fill:#FFFBF5,stroke:#F97316,stroke-width:2px,color:#7C2D12
+  style L1 fill:#F5F7FF,stroke:#4F46E5,stroke-width:2px,color:#312E81
 ```
 
-| 层级    | 定位                                                                                                 |
-| ------- | ---------------------------------------------------------------------------------------------------- |
-| Layer 1 | 通用 Agent 运行内核，对外提供稳定执行循环、工具、上下文、任务控制和可观测能力，不感知代码修复业务    |
-| Layer 2 | 代码修复参考实现，负责 Issue 处理、补丁协作、验证反馈、回滚与终态管理，通过 Runtime 接口使用底层能力 |
+修复层负责业务阶段、提示、角色策略和完成条件，运行内核负责执行与治理。CLI、工作台和评测调用同一修复服务，避免不同入口各自维护一套修复逻辑。
 
-这种拆分使模型供应商、工具实现和具体任务流程可以独立替换，同时避免将代码修复规则写入通用 Runtime。
+## 一次修复如何推进
 
-## Agent Runtime 与任务治理
+主 Agent 统筹定位、分析与修改，需要时委派只读 Subagent 在独立上下文中探索指定范围，返回带来源的候选发现。任务依赖由 Plan 管理，修改和验证依据实际执行证据推进。
 
-一次任务由统一 Agent Loop 驱动，每轮按“构建上下文 → 调用模型 → 解析决策 → 执行工具 → 写回 Observation”推进。Runtime 对模型决策设置明确边界：
+```mermaid
+flowchart LR
+  I(["问题与代码仓库"]) --> A["主 Agent<br/>建立定位假设"]
+  A --> E["代码探索<br/>按需委派只读 Subagent"]
+  E --> C["核对来源与当前代码"]
+  C --> P["受控工具修改"]
+  P --> V{"真实验证结果"}
+  V -->|测试通过且满足请求| D(["修复结果与验证证据"])
+  V -->|测试失败| F["确认回滚<br/>结构化失败反馈"]
+  F --> A
+  V -->|未验证或环境不可用| U["明确未验证原因<br/>保留执行记录"]
+  V -->|写入或清理结果未知| R["停止后续写入<br/>保留待恢复状态"]
 
-- 使用结构化 Tool Schema 与参数校验，模型不能绕过 Tool Gateway 直接执行动作；
-- 使用步数、时间、Token 和 Tool Call 预算限制任务成本；
-- 通过重复调用检测和 No-progress 规则识别空转；
-- CancellationToken 贯穿模型、工具、沙箱与 Orchestrator；
-- 每个安全边界写入 Checkpoint，恢复时重新校验 Workspace 状态与剩余预算。
-
-## Tool Runtime 与安全执行
-
-```text
-Model Tool Call
-  → Schema Validation
-  → Workspace / Path Policy
-  → Role Permission
-  → Quota / Duplicate / Approval Gate
-  → Executor
-  → Normalized Observation
-  → Snapshot Diff / Rollback
+  classDef agent fill:#EEF2FF,stroke:#6366F1,color:#312E81
+  classDef execution fill:#FFFFFF,stroke:#64748B,color:#334155
+  classDef decision fill:#FFF7ED,stroke:#F97316,color:#7C2D12
+  classDef success fill:#ECFDF5,stroke:#059669,color:#064E3B
+  classDef exception fill:#FFF1F2,stroke:#FB7185,color:#881337
+  class I,A,E agent
+  class C,P execution
+  class V,F,U decision
+  class D success
+  class R exception
 ```
 
-所有工具调用经过统一入口。文件路径被锚定在 Workspace；敏感路径、路径逃逸和未授权 Shell 被拒绝；修改类工具支持 Diff 预览、审批与前后快照。Docker 验证默认关闭网络，设置 CPU/内存限制、只读 RootFS 与非 Root 用户，并在结束、超时或取消时回收容器。
+Subagent 的发现需要经过任务范围、来源和工作区有效性检查，主流程复核关键源码后再修改。子任务不继承主会话历史、写权限或递归委派能力；共享预算与取消信号由运行时管理，避免并行探索扩大执行权限或失去成本约束。
 
-Docker 用于隔离验证环境和宿主依赖，但不被描述为能够运行任意不受信任输入的完整安全沙箱。
+补丁通过受治理工具实际落盘，由运行时检查权限、原文与执行结果。是否完成修复由独立验证服务运行真实命令后判定；模型回答中的“已修复”、静态检查或跳过测试，都不能替代满足请求条件的真实测试结果。
 
-## Context 与长任务治理
+## 长任务中的状态、上下文与成本
 
-Context 按 System、Tools、Knowledge、History、State 等类型分配独立预算。L0–L5 压缩从工具结果截断、消息裁剪逐步升级到结构化折叠与摘要，优先保留用户目标、安全约束、当前 Repair State、关键代码证据和最新验证反馈。
+任务变长后，历史摘要、工具输出和阶段状态容易混在一起。FixLoop 将当前目标、约束、决策与证据单独管理，再为每次模型调用组织所需上下文，使任务推进不依赖一段不断膨胀的聊天历史。
 
-原始 History 保持追加写入，压缩结果仅用于本轮 Context Projection；Checkpoint 保存任务状态、预算、关键工件与 Workspace 指纹，避免恢复时在过期代码状态上继续执行。
+| 需要保持的能力   | 设计取舍                                                                       |
+| ---------------- | ------------------------------------------------------------------------------ |
+| 任务要求持续有效 | 当前目标、约束和计划状态独立管理，历史摘要不获得修改权威状态的权限             |
+| 代码证据能够核对 | 保留来源、内容版本与使用状态，修改后重新判断旧证据是否仍适用                   |
+| 上下文预算可控   | 分级压缩、完整交互选择与按需结果展开共同控制输入体量，优先保留必需条件         |
+| 辅助调用同样受限 | 规划、提取、摘要与修复共享累计资源账本，分别控制单次容量、调用次数和总截止时间 |
+| 外部故障能够收敛 | 重试等待受取消和截止时间约束；预算耗尽、重复调用或无进展时明确停止或收敛执行   |
 
-## 验证、Trace 与失败归因
+原始交互与执行记录保留，压缩只形成当前请求的上下文视图。无法完整装入必需信息时阻止调用，避免把缺少关键条件的请求继续交给模型。模型与工具用量进入运行账本，恢复时沿用已记录预算。
 
-补丁是否正确由独立 Verifier 判定，而不是依赖模型自评。验证失败后，系统提取失败测试、错误摘要、上轮 Diff 与构建日志形成结构化反馈；修改先回滚，再进入下一轮修复，防止失败补丁污染后续状态。
+## 工具权限与执行恢复
 
-Canonical Trace 使用统一 `run_id/trace_id` 串联模型调用、工具执行、Context 压缩、补丁和验证事件，并以 Span 表达阶段关系。Langfuse 用于分析单次轨迹，Prometheus 用于聚合成功率、延迟、Token、工具拒绝和沙箱耗时；评测框架进一步区分模型决策、上下文、工具、补丁、验证环境和 Harness 等失败来源。
+所有动作经过统一 Tool Runtime，完成参数、路径、权限和预算检查，再交给对应执行后端。修改工具检查源文件状态并保留执行依据，多文件提交失败时尝试恢复已完成的修改；结果未确认时停止后续写入。
 
-## 项目指标
+工作区隔离与命令权限分别管理：Git Worktree 或工作台执行副本用于隔开代码状态，WSL / bubblewrap 后端约束受治理的文件与命令执行。工作台修复在后端不可用时明确失败，避免静默切换成宿主执行。
 
-| 项目结果   | 指标表现                                                                             |
-| ---------- | ------------------------------------------------------------------------------------ |
-| 修复效果   | 正式 60-run 评测中完整编排 `30/30` 修复成功，Single-Agent 基线 `29/30`               |
-| Patch 质量 | Patch 精度 `1.22`，高于 Single-Agent 基线的 `0.94`；引入回归率为 `0%`                |
-| 工程规模   | 生产代码约 `5.5 万`行，覆盖 Runtime、Repair、Evaluation、Harness 与 Observability    |
-| 自动化验证 | 建设约 `2,183` 个 pytest 测试函数，覆盖 Agent Loop、Tool、Context、Repair 与 Sandbox |
-| 安全执行   | 正式评测与验证链路中补丁均经确定性应用与独立 Verifier 判定                           |
+| 控制能力   | 执行语义                                                                   |
+| ---------- | -------------------------------------------------------------------------- |
+| Checkpoint | 保存运行身份、任务状态、预算与已确认执行结果，形成可核对的恢复边界         |
+| Resume     | 先取得运行所有权，再检查工作区、原资源终态与执行记录；已确认修改不盲目重放 |
+| Cancel     | 关闭新调用派发，将取消传递到子任务与执行进程，确认清理和回滚后结束         |
+| 权限审批   | 需要授权时保留明确的等待状态，授权后重新核对调用条件                       |
+| 未知结果   | 写入、进程退出或清理无法确认时进入待恢复状态，保留现场并阻止冲突操作       |
 
-## 快速开始
+运行所有权和资源终态分别校验，避免两个恢复请求同时接管同一任务，也避免将一次超时当成进程已退出。宿主执行、工作区隔离与命令沙箱各有边界，不能相互替代。
 
-### 环境要求
+### 受控的外部资料获取
 
-- Python `3.11+`
-- 可选：Docker，用于隔离验证
-- 可选：DeepSeek API Key，用于真实模型修复
+外部资料获取默认关闭。Patcher 可在宿主明确启用并授权后，通过 Search / Fetch 补充公开文档、版本说明与 Issue。外部访问受独立权限、请求配额、成本和截止时间约束，结果保留来源与不可信标记。
 
-### 安装
+外部资料不能授权本地操作，也不能作为源码已读或测试通过的证据。命令沙箱保持无网络，资料获取经固定宿主适配执行；仓库内容不能自行启用联网能力。
 
-```bash
-git clone https://github.com/changsheng1224/FixLoop.git
-cd FixLoop
-pip install -e ".[dev]"
+## Workbench：多会话中的候选与代码状态
+
+工作台提供普通聊天、项目只读问答和代码修复入口，以流式事件展示运行进度。项目可以关联多个会话，各次运行使用独立执行副本，候选补丁经差异预览和明确确认后才应用到原项目。
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as 开发者
+  participant W as Workbench
+  participant A as 会话 A 工作区
+  participant B as 会话 B 工作区
+  participant P as 原项目
+
+  W->>P: 获取输入版本与文件状态
+  W->>A: 创建独立执行副本
+  W->>B: 创建独立执行副本
+
+  par 会话 A
+    A->>A: 执行修复与真实验证
+    A-->>W: 候选 A 与验证证据
+  and 会话 B
+    B->>B: 执行修复与真实验证
+    B-->>W: 候选 B 与验证证据
+  end
+
+  U->>W: 预览并确认应用候选 A
+  W->>P: 校验版本和当前文件，串行应用
+  P-->>W: 当前项目状态已更新
+  U->>W: 申请应用候选 B
+  W->>P: 再次核对输入版本与当前文件
+  P-->>W: 检测到候选依据已过期
+  W-->>U: 拒绝覆盖，保留候选供复核
 ```
 
-运行通用 Agent Runtime：
+上图示意两个会话基于同一输入各自生成候选的情形。执行状态互不混用，原目录写入串行校验，先前生成的候选不能覆盖后来已更新的代码。
 
-```bash
-python -m agent_runtime "列出当前目录下的 Python 文件"
-```
+会话树保留分支与祖先关系，编辑早期轮次后从对应输入状态生成新分支，不带入原分支未来的对话和文件结果。浏览器刷新或重新连接可以续看事件，不重复提交任务；文件恢复使用预览和显式确认，发现外部编辑时拒绝直接覆盖。
 
-运行代码修复：
+## Trace 与评测贯穿同一执行链路
 
-```bash
-python -m src.cli repair \
-  --issue "TypeError in calculator.py:6" \
-  --repo demo/calculator \
-  --verbose
-```
+以统一运行身份关联模型请求、上下文选择、工具调用、补丁和验证事件，结合阶段耗时、资源消耗和拒绝原因，帮助区分模型决策、证据失效、工具执行与验证环境中的问题。
 
-运行无需真实 API 的单 Case 评测：
+评测复用正式修复服务，再独立判断输出结果；固定响应模型用于验证编排与工具契约，真实文件修改和测试执行分别记录。答案性资源与实际模型定位、补丁生成路径隔离，避免将离线判分信息带入修复决策。
 
-```bash
-python -m src.cli eval --case case_001 --fake --markdown
-```
-
-## License
-
-[MIT](https://github.com/changsheng1224/FixLoop)
+该设计将运行治理、交互工作台与评测放在一致的执行契约下，使问题既能从结果回溯到过程，也能把改动带回同一链路验证。
