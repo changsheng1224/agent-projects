@@ -1,288 +1,200 @@
 # DSH Case Compiler
 
-> 将一次冗长的 Agent 失败 Session，编译为安全、可重放、可审计的最小回归 Case。
+> Agent 失败诊断与回归验证插件：通过受控重放与轨迹最小化，从冗长失败 Session 中收敛关键复现条件，辅助问题归因与修复验证。
 
-[![CI](https://github.com/changsheng1224/dsh/actions/workflows/ci.yml/badge.svg)](https://github.com/changsheng1224/dsh/actions/workflows/ci.yml)
-[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6)](https://www.typescriptlang.org/)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/changsheng1224/dsh/blob/main/LICENSE)
+DSH Case Compiler 面向 Agent 开发中的工具误选、重复调用及交互异常，将失败 Session 转换为可重放、可缩减的标准用例。项目以失败轨迹最小化为核心，贯通请求重建、实验编排、执行控制与修复回归，让一次失败能够成为后续迭代中可持续使用的验证资产。
 
-## 项目背景与目标
+**个人职责：**独立负责架构设计、核心开发与插件交付，构建从失败重建、受控重放到最小化与回归验证的完整链路。
 
-复杂 Agent 的一次失败通常不是单条报错，而是一段同时包含多轮对话、动态 Context、Tool Schema、Tool Call、Tool Result 与外部状态的长轨迹。研发人员若直接复跑完整 Session，不仅很难判断究竟哪些信息维持了失败，还会受到模型随机性、环境漂移和写 Tool 副作用的干扰，导致 Bad Case 难定位、难共享，也难作为稳定的修复回归资产。
+**技术栈：**TypeScript / Node.js / pnpm Monorepo / DSH / Cordis / Vitest。
 
-DSH Case Compiler 面向 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 的失败调试场景，目标是把“偶发且冗长的失败记录”转化为“边界明确、证据充分、可重复验证的最小 Case”。系统从历史 Session 重建实际请求面，以 Failure Oracle 定义需要保留的失败行为，通过受控重复回放和分层 Delta Debugging 删除无关输入，最终输出可移植的 Case Bundle，支撑问题归因、团队共享和修复前后同配置验证。
+## 项目亮点
 
-它不是日志截断器，也不会因为原始 Transcript 中出现过错误就认定缩减有效。只有具备完整历史证据且通过重复行为验证的 Case 才能进入最小化；证据不足时系统明确降级为 `transcript-only`，不产生行为最小化结论。
+- **Agent 失败归因：**围绕上下文、工具交互与环境状态重建失败条件，通过保持同一失败的轨迹缩减，帮助开发者缩小排查范围。
+- **可组合的重放运行时：**分开控制模型决策与工具执行，支持历史结果、状态模拟和受控真实工具的组合，在复现真实性、实验成本与执行风险之间取得平衡。
+- **面向非确定行为的验证设计：**通过重复观测、独立复验和一致的失败判定口径，减少模型随机性对缩减结论的干扰。
+- **完整的工程交付：**覆盖插件接入、执行预算、状态隔离、取消恢复与回归用例交付，使分析过程可追溯、结果可复用。
 
-整体处理链路如下：
+在 **6 类、18 个离线确定性基准 Case** 上，均缩减至预设必要单元，平均单元缩减率达到 **73.6%**。该结果用于衡量离线缩减能力；真实模型与工具执行的验证范围见下文。
+
+## 背景与目标
+
+Agent 的失败通常跨越多轮对话、动态上下文和工具交互。完整日志保留了过程，但关键触发条件仍被大量无关信息掩盖；模型随机性和环境变化又使简单复跑难以形成可靠结论。修复后，开发者还需要确认目标失败是否消失，以及验证所依据的条件是否一致。
+
+项目围绕三个问题展开设计：**如何还原失败、如何收敛条件、如何验证修复**。将原始 Session 重建为有来源证据的用例，在受控实验中减少无关输入，再将精简结果沉淀为可重复执行的回归资产。
+
+### 失败诊断与回归流程
+
+```mermaid
+flowchart TB
+  S(["失败 Session"]) --> C["重建标准用例与来源证据"]
+  C --> G{"复现证据是否完整？"}
+  G -->|关键证据缺失| D["静态诊断 · 列出缺失条件"]
+  G -->|完整| R["受控重放 · 确认目标失败"]
+  R --> Q{"目标失败是否可复现？"}
+  Q -->|未通过验证| N["保留诊断证据与实验条件"]
+  Q -->|通过验证| M["轨迹最小化 · 独立复验"]
+  M --> B[/"精简用例与验证证据"/]
+  B --> V["修复前后行为对照"]
+  V --> A(["可重复执行的回归资产"])
+
+  classDef input fill:#F8FAFC,stroke:#64748B,color:#0F172A
+  classDef process fill:#EFF6FF,stroke:#3B82F6,color:#1E3A8A
+  classDef gate fill:#FFF7ED,stroke:#F59E0B,color:#7C2D12
+  classDef result fill:#ECFDF5,stroke:#10B981,color:#064E3B
+  class S input
+  class C,R,M,V process
+  class G,D,Q,N gate
+  class B,A result
+```
+
+完整性检查决定用例能够进入何种分析阶段；重放、缩减与修复对照使用一致的失败判定，使结论始终对应可核对的实验条件。
+
+## 核心能力与设计思路
+
+### 1. 失败重建与诊断：以实际请求条件作为分析起点
+
+将历史对话、关键上下文、工具定义及交互结果组织为标准用例，保留与原始 Session 的对应关系，使开发者能够追溯模型在失败时看到了什么、调用了什么，以及执行结果如何影响后续行为。
+
+重建过程检查复现条件的完整性：证据充分时进入行为验证，关键条件缺失时明确给出缺失项并保留静态分析能力，防止历史信息失真影响后续缩减。由此为上下文缺失、工具误选和交互异常提供统一的分析起点。
+
+### 2. 失败轨迹最小化：面向模型非确定性的实验设计
+
+围绕明确的目标失败，逐层裁剪无关对话、上下文、工具记录与环境输入，在保持同一失败可复现的前提下收敛关键条件，将长轨迹转化为更易理解和验证的精简用例。
+
+设计上将每次缩减视为一次受控实验：固定失败判定与实验配置，结合重复观测和独立复验评估候选。缩减结论对应当前实验边界内观察到的复现条件，为进一步归因提供依据，不直接等同于唯一根因。
+
+### 3. 可组合重放：分别验证模型决策与工具执行
+
+将“调用如何产生”与“结果如何获得”分开管理。分析工具误选时重新观察模型决策，分析执行异常时核对既定调用及状态变化，让验证结论对应实际观察到的行为。
+
+工具结果支持历史记录、状态模拟与显式接入的真实执行，不同工具可以按分析需求组合配置。通过保留关键交互并控制非关键外部依赖，兼顾复现真实性、实验可控性和执行成本。
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as 分析与实验编排
+  participant R as 重放运行时
+  participant M as 模型
+  participant T as 工具适配
+
+  A->>R: 提交用例与实验条件
+  R->>R: 重建初态，检查权限与预算
+
+  rect rgb(239, 246, 255)
+    Note over R,M: 调用来源：确定本轮调用
+    alt 模型重新决策
+      R->>M: 提供当前输入与工具结果
+      M-->>R: 生成工具调用
+    else 历史调用序列
+      R->>R: 载入已记录调用
+    end
+  end
+
+  R->>T: 派发调用，选择已配置的结果来源
+  alt 历史结果回放
+    T-->>R: 已记录结果
+  else 有状态模拟
+    T-->>R: 模拟结果与状态变化
+  else 受控真实工具
+    T-->>R: 执行结果与状态证据
+  end
+
+  opt 继续模型交互
+    R->>M: 将本轮结果反馈模型
+  end
+  R-->>A: 交互证据与执行状态
+  A->>A: 目标失败判定与行为对照
+```
+
+时序图示意一次工具交互。两类调用来源共享重放与执行控制能力，结果来源按工具分别配置；模型可以继续基于返回结果形成后续决策。历史序列执行与模型行为复现保留各自的验证口径。
+
+### 4. 状态与执行治理：保持候选实验相互独立
+
+将环境初态、交互依赖及执行前后状态纳入实验管理，为不同候选重建独立起点，避免前一次执行改变后续实验条件。对于依赖前序结果的调用，保留其状态关联，减少无效候选对分析结论的干扰。
+
+真实工具受明确的权限、作用范围和资源预算约束，并支持取消、进度保存与恢复。恢复前重新核对实验条件和剩余预算；出现写入结果不确定或清理异常时保留证据并停止后续执行，避免将执行故障误判为目标失败。
+
+### 5. 修复回归：让分析证据进入后续迭代
+
+将精简用例、失败判定、工具配置、来源证据和验证报告一并交付，在一致条件下比较修复前后的行为。典型失败可以持续保留为回归用例，减少问题交接时的信息丢失和重复排查。
+
+交付过程包含敏感信息处理与产物完整性检查，使失败用例能够被审查、共享和重复使用，让诊断结果持续服务于 Agent 质量改进。
+
+## 架构设计与取舍
+
+系统按接入、编排、领域规则与运行适配划分职责。下图从模块边界展示逻辑架构：实线表示能力调用，虚线表示运行适配遵循核心契约。
 
 ```mermaid
 flowchart LR
-  S["失败 Session"] --> I["导入与请求重建"]
-  I --> G["完整性与安全检查"]
-  G --> O["Failure Oracle"]
-  O --> R["受控重复回放"]
-  R --> M["分层 DDMin"]
-  M --> B["Minimal Case Bundle"]
-  B --> V["修复后同配置验证"]
+  subgraph ENTRY["接入层"]
+    direction TB
+    PLUGIN["DSH 插件"]
+    CLI["命令入口"]
+  end
+
+  subgraph APP["应用编排"]
+    ORCH["用例重建<br/>重放与最小化<br/>修复回归与报告"]
+  end
+
+  subgraph CORE["领域核心"]
+    direction TB
+    CASE["用例与依赖约束"]
+    FAILURE["目标失败判定"]
+    VERIFY["候选缩减与结果验证"]
+  end
+
+  subgraph RUNTIME["运行适配"]
+    direction TB
+    MODEL["模型与宿主适配"]
+    TOOL["工具与状态环境"]
+    STORE[("进度与回归资产")]
+  end
+
+  ENTRY --> APP
+  APP --> CORE
+  APP --> RUNTIME
+  RUNTIME -.->|遵循核心契约| CORE
+
+  classDef module fill:#FFFFFF,stroke:#94A3B8,color:#334155
+  classDef orchestration fill:#FFFFFF,stroke:#475569,stroke-width:2px,color:#0F172A
+  classDef core fill:#FFFFFF,stroke:#8B5CF6,color:#4C1D95
+  classDef storage fill:#FFFFFF,stroke:#64748B,color:#334155
+  class PLUGIN,CLI,MODEL,TOOL module
+  class ORCH orchestration
+  class CASE,FAILURE,VERIFY core
+  class STORE storage
+  style ENTRY fill:#F8FAFC,stroke:#CBD5E1,color:#334155
+  style APP fill:#F1F5F9,stroke:#64748B,color:#0F172A
+  style CORE fill:#F5F3FF,stroke:#A78BFA,stroke-width:2px,color:#4C1D95
+  style RUNTIME fill:#F8FAFC,stroke:#94A3B8,stroke-dasharray:5 5,color:#334155
 ```
 
-最终结果被称为 **Observed 1-minimal Case**：在固定模型、配置、环境、缩减粒度和经验阈值下，任一剩余可缩减单元都无法继续删除。该结论用于证明“这个 Case 已足够小且仍能稳定暴露问题”，而不是声称得到全局最小输入或直接找到因果根因。
+| 设计取舍                           | 工程价值                                                         |
+| ---------------------------------- | ---------------------------------------------------------------- |
+| 领域规则与宿主、模型及工具实现解耦 | 核心缩减与判定能力可独立验证和复用，减少外部变化对分析流程的影响 |
+| 用例、实验条件与执行结果统一关联   | 保持缩减前后的判定口径一致，使每个结论都有可核对的依据           |
+| 实验隔离与执行权限分别管理         | 独立初态保证实验可比较，权限和预算约束实际操作范围               |
+| 历史证据与新一轮验证分别记录       | 保留审查与恢复所需信息，避免把已保存的结果当作新的复现证据       |
 
-## 核心能力
+## 验证结果与范围
 
-| 能力             | 作用                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------ |
-| Session 编译     | 从 JSONL 或 DSH Session ID 重建版本化 CaseIR，统一表达请求、History、Context、Tool 交换及来源信息      |
-| 完整性与证据门禁 | 检查历史 Prompt、Context、Tool Schema 与 Result 是否闭合；缺失关键证据时只允许静态分析                 |
-| Failure Oracle   | 将重复 Tool Call、错误 Tool 选择、禁止 Tool 等失败现象转换为可执行、可重复判定的行为条件               |
-| 分层 DDMin       | 按 History、Context、Tool Surface 与 Workspace Files 由粗到细缩减，并维护依赖闭包与不可缩减边界        |
-| 安全重放         | 以 Tool Policy、Fixture Runtime 和预算控制隔离真实副作用，未知 Tool、Fixture Miss 与执行异常均失败关闭 |
-| 修复验证         | 对原始版本、Minimal Case 与修复版本执行同 Oracle、同配置复跑，区分“偶然未出现”与“问题已关闭”           |
-| Case 资产化      | 输出带 Schema Version、校验和、脱敏结果及 Markdown/JSON/JUnit 报告的 Case Bundle，便于审查与共享       |
+| 验证内容               | 已有结果                                                                                                 |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- |
+| 离线确定性缩减基准     | 覆盖 **6 类、18 个 Case**，均缩减至预设必要单元；各 Case 单元缩减率的算术平均为 **73.6%**                |
+| 真实模型与历史结果重放 | 单个 DeepSeek 合成 Case 的目标失败在缩减前 **5/5** 次命中、最终验证 **10/10** 次命中，未执行真实外部写入 |
+| 受控文件执行           | 完成限定范围的 Windows 集成验证，覆盖独立初态、文件操作、权限控制、取消及清理异常                        |
 
-## 五分钟离线体验
+离线基准验证缩减与依赖处理；真实模型结果来自预设目标行为的合成实验，验证重放和最小化链路，不代表生产场景中的失败概率或普遍修复效果。
 
-### 环境要求
+API 交互与模型组合已完成相关接口、离线编排和模拟验证，真实 HTTP 与真实模型组合的端到端验收仍待完成。执行环境面向受信任开发者的用例与工作区，其隔离用于保持实验条件，不替代运行任意不可信代码的安全沙箱。
 
-- Node.js `^22.19.0 || >=24.0.0`
-- pnpm `11.19.0`
-- Git `>=2.26`
+## 项目价值
 
-### 安装与验证
-
-```bash
-git clone https://github.com/changsheng1224/dsh.git
-cd dsh
-corepack enable
-pnpm install --frozen-lockfile
-pnpm build
-pnpm test:e2e
-```
-
-离线 E2E 包含两类可重复 Demo：
-
-- [`synthetic-search-loop`](https://github.com/changsheng1224/dsh/tree/main/examples/synthetic-search-loop)：重复调用同一搜索 Tool；
-- [`realistic-wrong-tool`](https://github.com/changsheng1224/dsh/tree/main/examples/realistic-wrong-tool)：选择具有外部写语义的错误 Tool。
-
-它们覆盖 Session 导入、CaseIR、Oracle、最小化、Fixture 回放、Bundle 往返校验和修复后负向验证。整个过程不访问网络、不读取 Provider 凭据，也不执行真实写操作。
-
-Windows 用户也可以直接运行：
-
-```powershell
-./examples/run-f15-demo.ps1
-```
-
-## CLI 快速上手
-
-构建后可以直接运行仓库内 CLI：
-
-```bash
-node packages/cli/lib/bin.js --help
-```
-
-将示例 Session 编译为标准 Bundle：
-
-```bash
-node packages/cli/lib/bin.js compile \
-  --input examples/synthetic-search-loop/session.jsonl \
-  --oracle examples/synthetic-search-loop/oracle.json \
-  --policy examples/synthetic-search-loop/policy.json \
-  --output output/search-loop-case \
-  --json
-```
-
-生成不需要再次重放的 Markdown 报告：
-
-```bash
-node packages/cli/lib/bin.js report output/search-loop-case \
-  --format markdown \
-  --report-file output/search-loop-report.md
-```
-
-主要命令：
-
-```text
-dsh-case capture enable|disable|status|clean
-dsh-case compile --input <session.jsonl> --output <case-dir>
-dsh-case compile --session <session-id> --output <case-dir>
-dsh-case reproduce <case-dir> [--live]
-dsh-case test <case-dir> [--live]
-dsh-case live <case-dir> --confirm
-dsh-case report <case-dir> --format terminal|json|markdown|junit
-dsh-case oracle suggest --input <trajectory.json>
-dsh-case cache clean|status
-```
-
-未注入 Live Runner 时，`reproduce` 与 `test` 只执行 Fixture-backed Transcript Preflight，并返回专用退出码 `4`。这证明结构与安全前置检查通过，不代表模型行为已经复现。
-
-完整参数和退出码见 [`packages/cli/README.md`](https://github.com/changsheng1224/dsh/blob/main/packages/cli/README.md)。
-
-## 接入 DSH
-
-项目将所有 DSH/Cordis 依赖隔离在 `@dsh-case-compiler/dsh-plugin`。当前验证基线为：
-
-- DSH `0.1.2-alpha.1`
-- upstream commit `cd5ef8148158c3a752a658978873241fdf8e2bbc`
-
-从已构建或已发布的包安装插件：
-
-```bash
-dsh plugin --profile headless add @dsh-case-compiler/dsh-plugin
-```
-
-插件默认只安装只读请求监听器。启用 Snapshot 持久化时，在项目目录创建 `.dsh-case-compiler/capture.json`：
-
-```json
-{
-  "schemaVersion": 1,
-  "enabled": true
-}
-```
-
-宿主可以通过统一入口获得 CLI adapters：
-
-```ts
-const dispose = ctx.dshCaseCompiler.quickStart()
-const adapters = ctx.dshCaseCompiler.adapters()
-
-// 将 adapters 注入 dsh-case 的 compile/reproduce/test 组合根
-// 生命周期结束后卸载监听器
-dispose()
-```
-
-DSH 仍处于 developer preview。插件不会猜测未公开 API，也不会使用当前 Tool Schema 静默替换缺失的历史 Schema；版本或契约发生漂移时会 fail-closed。
-
-## DDMin 如何保证 Minimal 有效
-
-经典 DDMin 假设判定函数是确定性的，但模型输出具有随机性：某个缩减候选在单次运行中没有报错，既可能说明关键条件被删除，也可能只是模型本次没有触发失败。因此系统把 DDMin 放进一条“先证明可复现，再缩减，再逐单元复核”的证据链：
-
-1. **完整性门禁**：先确认历史请求面、Tool Schema、Fixture 和来源信息足以重建行为；否则只输出 `transcript-only`。
-2. **基线验证**：原始 Case 必须达到 `4/5` 次 Oracle 命中，避免对本身不可稳定复现的问题进行最小化。
-3. **分层缩减**：按 History、Context、Tool Surface、Workspace Files 依次执行由粗到细的补集测试；Reducer 创建不可变 Revision，并同步维护 Tool 与 Fixture 的依赖闭包。
-4. **候选复验**：每次删除先以 2 次试验筛选，再扩展到 5 次；只有达到 `4/5` 的候选才能替代当前 Case。Transcript 回放只能做结构和安全预检，不能接受行为性删除。
-5. **新鲜最终验证**：缩减结束后使用未复用的试验重新运行 10 次，至少 `8/10` 命中才保留最小化结论。
-6. **逐单元验证**：依次尝试删除每一个剩余可缩减单元；若任一变体仍达到 `4/5`，说明 Case 还不够小，系统继续缩减。
-
-默认经验门槛如下：
-
-| 阶段           |                                             判定门槛 |
-| -------------- | ---------------------------------------------------: |
-| 原始 Case 基线 |                             至少 `4/5` 次命中 Oracle |
-| 候选 Case      |      先筛选 `2` 次，再扩展至 `5` 次；至少 `4/5` 命中 |
-| 最终 Case      |                   新鲜运行 `10` 次；至少 `8/10` 命中 |
-| 逐单元验证     | 每个剩余单元删除后运行 `5` 次；达到 `4/5` 则继续缩减 |
-
-只有最终验证和逐单元验证同时通过，状态才会升级为 `observed-one-minimal`。模型、参数、Oracle、Tool Policy、Fixture、DSH 版本与 Runner 身份共同参与证据身份；预算耗尽或取消只会得到 `partial-minimization`。执行错误、Fixture Miss、权限拒绝、限流和取消均不能计为 Oracle 命中。
-
-这一机制保证的是**给定实验边界下的 Observed 1-minimal**，而不是计算代价极高的全局最小，也不把经验阈值包装成统计显著性。完整语义见 [ADR-0002](https://github.com/changsheng1224/dsh/blob/main/docs/adr/0002-observed-one-minimal.md)。
-
-## 安全边界
-
-项目处理的是开发者拥有并信任的 Session 和 Workspace，**不是用于运行任意不受信任输入的安全沙箱**。
-
-| Tool Effect    | 默认行为                                       |
-| -------------- | ---------------------------------------------- |
-| Pure           | 默认 Fixture；只有显式证明安全后才允许真实执行 |
-| Read           | Fixture                                        |
-| Local write    | Fixture                                        |
-| External write | Fixture                                        |
-| Irreversible   | Deny                                           |
-
-关键不变量：
-
-- 未知 Tool、缺失 Fixture、歧义匹配和策略冲突全部 fail-closed；
-- 不执行任意 Shell Command，不执行真实本地或外部写 Tool；
-- 错误、拒绝、取消和限流不会被当作失败复现证据；
-- 导出前执行敏感信息脱敏与独立残留扫描，扫描失败则拒绝生成 Bundle；
-- Bundle 路径必须为根目录内的规范相对路径，并通过哈希和长度校验；
-- Workspace 隔离只是一致性机制，不被描述为安全沙箱。
-
-完整威胁边界见 [`docs/security-model.md`](https://github.com/changsheng1224/dsh/blob/main/docs/security-model.md)。
-
-## Case Bundle
-
-生成结果是可读、可审查、可放入 Git 的版本化目录：
-
-```text
-case-bundle/
-├── case.yaml
-├── manifest.json
-├── oracle.yaml
-├── README.md
-├── request/
-│   ├── system-prompt.txt
-│   ├── current-user.json
-│   ├── history.jsonl
-│   └── context.json
-├── tools/
-│   ├── schemas.json
-│   ├── fixtures.jsonl
-│   └── policies.yaml
-└── reports/
-    ├── completeness.json
-    ├── safety.json
-    ├── minimization.json
-    └── reproduction.json
-```
-
-所有持久化格式均包含 Schema Version，并在边界执行运行时校验。Bundle 采用原子写入，`manifest.json` 记录每个载荷文件的 SHA-256 与字节长度。
-
-## 架构
-
-```mermaid
-flowchart LR
-  CLI["@dsh-case-compiler/cli"] --> APP["Application Services"]
-  DSH["@dsh-case-compiler/dsh-plugin"] --> APP
-  CLI --> NODE["@dsh-case-compiler/runtime-node"]
-  DSH --> NODE
-  APP --> CORE["@dsh-case-compiler/core"]
-  NODE --> CORE
-  DSH --> HOST["DSH / Cordis APIs"]
-```
-
-| 模块           | 定位                                                      |
-| -------------- | --------------------------------------------------------- |
-| `core`         | 承载 CaseIR、Failure Oracle、Replay、DDMin 等核心领域规则 |
-| `runtime-node` | 提供 Fixture、安全策略、缓存恢复及 Case Bundle 持久化     |
-| `dsh-plugin`   | 适配 DSH Session、模型调用、Tool 拦截及插件生命周期       |
-| `cli`          | 提供编译、重放、最小化、验证和报告入口                    |
-
-各模块依赖统一向 Core 收敛，DSH、文件系统和模型调用均隔离在适配层，使最小化能力可以独立测试、复用，并降低外部版本变化的影响。
-
-## 项目指标
-
-| 项目结果       | 指标表现                                                                |
-| -------------- | ----------------------------------------------------------------------- |
-| Case 缩减效果  | 复杂失败轨迹最高缩减 `91.1%`，Minimal Case 输入 Token 减少 `50%+`       |
-| Minimal 有效性 | 覆盖 6 类共 `18` 个代表性 Case，必要单元保留正确率达到 `100%`           |
-| 行为复现稳定性 | 关键失败行为最终重复验证命中率达到 `100%（10/10）`                      |
-| 安全与修复验证 | 高风险 Tool 真实外部写入为 `0`，修复后同配置复跑不再命中 Failure Oracle |
-
-## 工程质量
-
-```bash
-pnpm format:check
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm run ci
-pnpm run release:check
-```
-
-CI 在 Windows/Linux 与 Node.js `22.19.0`/`24` 矩阵上运行格式、Lint、Typecheck、测试、覆盖率、构建和 Package Tarball 检查。真实模型测试需要用户凭据和费用预算，永远不会由普通 CI 隐式执行。
-
-## 当前状态与限制
-
-当前版本为 `1.0.0` developer release，适用于本地失败 Case 编译和受控验证。
-
-- 仅支持受信任开发者拥有的 Session、Case 和 Workspace；
-- DSH 兼容性绑定到已验证版本，升级前需要重新执行契约检查；
-- 不自动推断 Failure Oracle；
-- 不执行任意 Shell Command 或真实写 Tool；
-- 不声称全局最小、统计显著性或因果根因；
-- Live Replay 必须由宿主显式注入 Runner、凭据和预算。
+- **让失败更易定位：**将完整交互收敛为关键复现条件，帮助开发者聚焦上下文、工具选择和状态依赖中的问题。
+- **让实验更易复核：**将模型行为、工具执行与环境变化放入统一的受控验证过程，保留可追溯的实验依据。
+- **让修复持续可验证：**把一次失败沉淀为回归资产，连接问题分析、修复对照与后续迭代。
 
 ## License
 
-[Apache-2.0](https://github.com/changsheng1224/dsh/blob/main/LICENSE)
+Apache-2.0
